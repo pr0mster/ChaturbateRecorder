@@ -75,6 +75,7 @@ class AddModelsThread(threading.Thread):
         self.lock.release()
 
 if __name__ == '__main__':
+    settings = config.readConfig()
     if 'postProcessingCommand' in settings:
         post_processing = PostProcessing(settings['postProcessingCommand'], settings['postProcessingThreads'] or 2)
     cleaningThread = CleaningThread()
