@@ -13,6 +13,10 @@ def readConfig():
         'wishlist': config.get('paths', 'wishlist'),
         'interval': int(config.get('settings', 'checkInterval')),
         'postProcessingCommand': config.get('settings', 'postProcessingCommand'),
+
+        'username': config.get('login', 'username'),
+        'password': config.get('login', 'password'),
+        'access_token': config.get('login', 'access_token'),
     }
     try:
         settings['postProcessingThreads'] = int(config.get('settings', 'postProcessingThreads'))
