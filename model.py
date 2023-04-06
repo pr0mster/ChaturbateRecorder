@@ -5,9 +5,10 @@ import streamlink
 import requests
 
 import config
+import log
 
 class Model(threading.Thread):
-    def __init__(self, model, threads, recording_threads):
+    def __init__(self, model, threads, recording_threads, post_processing):
         threading.Thread.__init__(self)
         self.model = model
         self._stopevent = threading.Event()
@@ -17,6 +18,7 @@ class Model(threading.Thread):
         self.lock = threading.Lock()
         self.threads = threads
         self.recording_threads = recording_threads
+        self.post_processing = post_processing
 
     def run(self):
         settings = config.readConfig()
@@ -62,11 +64,10 @@ class Model(threading.Thread):
                         except:
                             fd.close()
                             break
-                if settings['postProcessingCommand']:
-                    processingQueue.put({'model': self.model, 'path': self.file})
+                if self.post_processing:
+                    self.post_processing.add({'model': self.model, 'path': self.file})
         except Exception as e:
-            with open('log.log', 'a+') as f:
-                f.write(f'\n{datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")} EXCEPTION: {e}\n')
+            log(f'EXCEPTION: {e}')
             self.stop()
         finally:
             self.exceptionHandler()
@@ -82,21 +83,6 @@ class Model(threading.Thread):
 
     def exceptionHandler(self):
         self.stop()
-        self.online = False
-        self.lock.acquire()
-        for index, thread in enumerate(self.recording_threads):
-            if thread.model == self.model:
-                del self.recording_threads[index]
-                break
-        self.lock.release()
-        try:
-            file = os.path.join(os.getcwd(), self.file)
-            if os.path.isfile(file):
-                if os.path.getsize(file) <= 1024:
-                    os.remove(file)
-        except Exception as e:
-            with open('log.log', 'a+') as f:
-                f.write(f'\n{datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")} EXCEPTION: {e}\n')
 
     def isOnline(self):
         try:
@@ -122,3 +108,17 @@ class Model(threading.Thread):
 
     def stop(self):
         self._stopevent.set()
+        self.online = False
+        self.lock.acquire()
+        for index, thread in enumerate(self.recording_threads):
+            if thread.model == self.model:
+                del self.recording_threads[index]
+                break
+        self.lock.release()
+        try:
+            file = os.path.join(os.getcwd(), self.file)
+            if os.path.isfile(file):
+                if os.path.getsize(file) <= 1024:
+                    os.remove(file)
+        except Exception as e:
+            log(f'EXCEPTION: {e}')

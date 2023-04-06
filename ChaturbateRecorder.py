@@ -1,13 +1,10 @@
 import time
 import os
 import threading
-import streamlink
-import subprocess
-import queue
-import requests
 
 from model import Model
 import config
+from postprocessing import PostProcessing
 
 # Enable ANSI escape sequence processing in Windows
 if os.name == 'nt':
@@ -23,17 +20,6 @@ recording_threads = []
 def cls():
     os.system('cls' if os.name == 'nt' else 'clear')
 
-def postProcess():
-    while True:
-        while processingQueue.empty():
-            time.sleep(1)
-        parameters = processingQueue.get()
-        model = parameters['model']
-        path = parameters['path']
-        filename = os.path.split(path)[-1]
-        directory = os.path.dirname(path)
-        file = os.path.splitext(filename)[0]
-        subprocess.call(settings['postProcessingCommand'].split() + [path, filename, directory, model, file, 'cam4'])
 
 
 class CleaningThread(threading.Thread):
@@ -79,7 +65,7 @@ class AddModelsThread(threading.Thread):
                 aux.append(model)
                 self.counterModel = self.counterModel + 1
                 if not Model.isModelInListofObjects(model, threads) and not Model.isModelInListofObjects(model, recording_threads):
-                    thread = Model(model, threads, recording_threads)
+                    thread = Model(model, threads, recording_threads, post_processing)
                     thread.daemon = True
                     thread.start()
                     threads.append(thread)
@@ -89,18 +75,12 @@ class AddModelsThread(threading.Thread):
         self.lock.release()
 
 if __name__ == '__main__':
-    settings = config.readConfig()
-    if settings['postProcessingCommand']:
-        processingQueue = queue.Queue()
-        postprocessingWorkers = []
-        for i in range(0, settings['postProcessingThreads']):
-            t = threading.Thread(target=postProcess)
-            postprocessingWorkers.append(t)
-            t.daemon = True
-            t.start()
+    if 'postProcessingCommand' in settings:
+        post_processing = PostProcessing(settings['postProcessingCommand'], settings['postProcessingThreads'] or 2)
     cleaningThread = CleaningThread()
     cleaningThread.daemon = True
     cleaningThread.start()
+
     while True:
         try:
             settings = config.readConfig()
