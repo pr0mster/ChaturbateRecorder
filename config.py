@@ -11,7 +11,8 @@ def readConfig():
         'save_directory': config.get('paths', 'save_directory'),
         'directory_structure': config.get('paths', 'directory_structure').lower(),
         'wishlist': config.get('paths', 'wishlist'),
-        'interval': int(config.get('settings', 'checkInterval')),
+        'interval': int(config.get('settings', 'check_online_interval')),
+        'max_duration': int(config.get('settings', 'max_duration_mins')),
         'postProcessingCommand': config.get('settings', 'postProcessingCommand'),
 
         'username': config.get('login', 'username'),

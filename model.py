@@ -1,6 +1,7 @@
 import datetime
 import threading
 import os
+import time
 import streamlink
 import requests
 
@@ -8,32 +9,27 @@ import config
 import log
 
 class Model(threading.Thread):
-    def __init__(self, model, threads, recording_threads, post_processing):
+    def __init__(self, model, app):
         threading.Thread.__init__(self)
-        self.model = model
         self._stopevent = threading.Event()
-        self.file = None
-        self.online = None
-        self.hls_source = None
-        self.lock = threading.Lock()
-        self.threads = threads
-        self.recording_threads = recording_threads
-        self.post_processing = post_processing
+        self.running = True
 
-    def run(self):
         settings = config.readConfig()
 
-        isOnline = self.isOnline()
-        if isOnline == False:
-            self.online = False
-            self.hls_source = None
+        self.model = model
+        self.start_time = None
+        self.app = app
+        self.file = None
+        self.directory = settings['save_directory']
+        self.max_duration = settings['max_duration'] or 0
+        self.online = None
+        self.hls_source = None
 
-            return
-
-        self.online = True
+    def generateFilename(self):
+        settings = config.readConfig()
         now = datetime.datetime.now()
         self.file = settings['directory_structure'].format(
-            path=settings['save_directory'],
+            path=self.directory,
             model=self.model, 
             seconds=now.strftime("%S"),
             minutes=now.strftime("%M"),
@@ -42,47 +38,38 @@ class Model(threading.Thread):
             month=now.strftime("%m"),
             year=now.strftime("%Y")
         )
-        try:
-            session = streamlink.Streamlink()
-            streams = session.streams(f'hlsvariant://{self.hls_source}')
-            stream = streams['best']
-            fd = stream.open()
-            if not self.isModelInListofObjects(self.model, self.recording_threads):
-                os.makedirs(os.path.join(settings['save_directory'], self.model), exist_ok=True)
-                with open(self.file, 'wb') as f:
-                    self.lock.acquire()
-                    self.recording_threads.append(self)
-                    for index, thread in enumerate(self.threads):
-                        if thread.model == self.model:
-                            del self.threads[index]
-                            break
-                    self.lock.release()
-                    while not (self._stopevent.isSet() or os.fstat(f.fileno()).st_nlink == 0):
-                        try:
-                            data = fd.read(1024)
-                            f.write(data)
-                        except:
-                            fd.close()
-                            break
-                if self.post_processing:
-                    self.post_processing.add({'model': self.model, 'path': self.file})
-        except Exception as e:
-            log(f'EXCEPTION: {e}')
-            self.stop()
-        finally:
-            self.exceptionHandler()
 
-    @staticmethod
-    def isModelInListofObjects(obj, lista):
-        result = False
-        for i in lista:
-            if i.model == obj:
-                result = True
-                break
-        return result
+    def run(self):
+        settings = config.readConfig()
 
-    def exceptionHandler(self):
-        self.stop()
+        while self.running:
+            isOnline = self.isOnline()
+            if isOnline == False:
+                if self.online:
+                    self.stopRecording()
+                time.sleep(settings['interval'])
+                continue
+
+            # Shouldn't happen? Another thread recording the same model?
+            if self.app.isRecording(self.model):
+                time.sleep(1)
+                continue
+
+            # Model is online - start recording
+            self.startRecording()
+            
+
+    def info(self):
+        ret = {
+            'model': self.model,
+            'online': self.online,
+            'start_time': self.start_time,
+        }
+
+        ret['duration'] = datetime.datetime.now() - self.start_time
+        ret['file_size'] = os.path.getsize(self.file)
+
+        return ret
 
     def isOnline(self):
         try:
@@ -90,6 +77,7 @@ class Model(threading.Thread):
             resp = requests.get(model_url)
 
             if resp.headers.get('content-type') != 'application/json':
+                log.error(f'{self.model} couldn\'t be checked - filtered?')
                 print(f'CloudFlare filtering {self.model}')
                 return False
 
@@ -106,19 +94,60 @@ class Model(threading.Thread):
             print(e)
             return False
 
-    def stop(self):
-        self._stopevent.set()
-        self.online = False
-        self.lock.acquire()
-        for index, thread in enumerate(self.recording_threads):
-            if thread.model == self.model:
-                del self.recording_threads[index]
-                break
-        self.lock.release()
+    def startRecording(self):
+        self.online = True
+        self.generateFilename()
+        print(f'{self.model} is online')
+        self._stopevent.clear()
+        self.start_time = datetime.datetime.now()
+
         try:
-            file = os.path.join(os.getcwd(), self.file)
-            if os.path.isfile(file):
-                if os.path.getsize(file) <= 1024:
-                    os.remove(file)
+            session = streamlink.Streamlink()
+            streams = session.streams(f'hlsvariant://{self.hls_source}')
+            stream = streams['best']
+            with stream.open() as hls_stream:
+                os.makedirs(os.path.join(self.directory, self.model), exist_ok=True)
+                
+                f = open(self.file, 'wb')
+                self.app.startRecording(self)
+
+                while not (self._stopevent.isSet() or os.fstat(f.fileno()).st_nlink == 0):
+                    try:
+                        # Break file into 1h chunks
+                        if self.max_duration:
+                            delta = datetime.datetime.now() - self.start_time
+                            minutes = delta.total_seconds() / 60
+                            if minutes > self.max_duration:
+                                self.app.processRecording(self.model, self.file, self.info()['duration'])
+                                self.start_time = datetime.datetime.now()
+                                self.generateFilename()
+                                f = open(self.file, 'wb')
+
+                        data = hls_stream.read(1024)
+                        f.write(data)
+                    except:
+                        hls_stream.close()
+                        break
+            
         except Exception as e:
-            log(f'EXCEPTION: {e}')
+            log.exception(f'EXCEPTION: {e}')
+        finally:
+            if self.online:
+                self.stopRecording()
+
+    def stopRecording(self):
+        self.online = False
+        self.app.stopRecording(self)
+        self.start_time = None
+        self._stopevent.set()
+        self.hls_source = None
+
+        # If file is too small, delete it
+        if self.file:
+            try:
+                if os.path.isfile(self.file) and os.path.getsize(self.file) <= 1024:
+                    os.remove(self.file)
+            except Exception as e:
+                log.exception(f'EXCEPTION: {e}')
+
+            self.file = None

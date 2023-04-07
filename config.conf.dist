@@ -1,5 +1,5 @@
 [paths]
-wishlist = wanted.txt
+wishlist = wishlist.txt
 save_directory = .
 
 # set the directory structure - default is "{path}/{model}/{st}_{model}.mp4"
@@ -23,7 +23,11 @@ completed_directory =
 
 
 [settings]
-checkInterval = 300
+check_online_interval = 300
+
+# Specify the maximum duration of recordings in minutes. Shows longer than this are split into separate files
+
+max_duration_mins = 60
 
 # Specify the genders you would like to monitor to record. Separate multiple genders with a comma
 # acceptable genders are female, male, trans, and couple
